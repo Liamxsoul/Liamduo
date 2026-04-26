@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8615303982:AAH0IgUSunf-VDkFVa6wi-svNYpAmThU7OQ"
+BOT_TOKEN = "8192096605:AAEmxFRw8jLpGXb5_LVFFvIVjvpvs6C28ik"
 ADMIN_IDS = [7049509075,1832003738]
 MAX_THREADS = 50
 BATCH_SIZE = 10000
