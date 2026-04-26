@@ -45,7 +45,6 @@ hits_per_page = 10
 all_super_hits = []
 all_family_hits = []
 all_free_accounts = []
-all_error_accounts = []
 
 # Aggregate counters (across all users) - protected by stats_lock
 super_count = 0
@@ -862,8 +861,7 @@ def send_hits_list(chat_id, page=0):
     markup.row(*btns)
     markup.row(
         InlineKeyboardButton("📋 EXPORT HITS", callback_data="copy_all_hits"),
-        InlineKeyboardButton("⚠️ FREE", callback_data="export_free"),
-        InlineKeyboardButton("❌ ERRORS", callback_data="export_errors")
+        InlineKeyboardButton("⚠️ FREE", callback_data="export_free")
     )
     markup.row(InlineKeyboardButton("🏠 MENU", callback_data="main_menu"))
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
@@ -1086,7 +1084,6 @@ def callback_handler(call):
                 all_super_hits.clear()
                 all_family_hits.clear()
                 all_free_accounts.clear()
-                all_error_accounts.clear()
             with stats_lock:
                 super_count = family_count = free_count = fail_count = 0
                 max_count = individual_count = 0
@@ -1150,24 +1147,6 @@ def callback_handler(call):
                 file_obj.name = f"free_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 bot.send_document(call.message.chat.id, file_obj,
                                   caption=f"⚠️ Free Accounts: {len(free_snap)}")
-
-
-        elif call.data == "export_errors":
-            bot.answer_callback_query(call.id)
-            with hits_lock:
-                error_snap = list(all_error_accounts)
-            if not error_snap:
-                bot.send_message(call.message.chat.id, "📭 No error accounts collected yet.")
-            else:
-                import io as _io2
-                txt = f"ERROR ACCOUNTS {datetime.now().strftime('%Y-%m-%d %H:%M')}\n" + "="*30 + "\n"
-                txt += f"Total: {len(error_snap)} accounts\n\n"
-                for e, p in error_snap:
-                    txt += f"{e}:{p}\n"
-                file_obj = _io2.BytesIO(txt.encode("utf-8"))
-                file_obj.name = f"errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                bot.send_document(call.message.chat.id, file_obj,
-                                  caption=f"❌ Error Accounts: {len(error_snap)}")
 
         elif call.data.startswith("hits_page_"):
             page = int(call.data.split("_")[2])
@@ -1410,7 +1389,6 @@ def process_combos(chat_id, combos):
     local_super = local_family = local_free = local_fail = 0
     local_max = local_individual = 0
     local_batch_super = local_batch_family = local_batch_free = local_batch_fail = 0
-                    local_batch_max = local_batch_individual = 0
     local_batch_max = local_batch_individual = 0
 
     total = len(combos)
@@ -1451,8 +1429,6 @@ def process_combos(chat_id, combos):
                     local_batch_fail += 1
                     with stats_lock:
                         fail_count += 1
-                    with hits_lock:
-                        all_error_accounts.append((email, password))
                     continue
 
                 if status == "HIT":
