@@ -1411,6 +1411,18 @@ def process_combos(chat_id, combos):
         sess["checking_active"] = True
         sess["stop_flag"] = False
 
+    # Clear all result lists at the start of every new run
+    with hits_lock:
+        all_super_hits.clear()
+        all_max_hits.clear()
+        all_individual_hits.clear()
+        all_family_hits.clear()
+        all_free_accounts.clear()
+        all_error_accounts.clear()
+    with stats_lock:
+        super_count = family_count = free_count = fail_count = 0
+        max_count = individual_count = 0
+
     # Per-user local counters (so multiple users don't see each other's progress)
     local_super = local_family = local_free = local_fail = 0
     local_max = local_individual = 0
@@ -1440,6 +1452,7 @@ def process_combos(chat_id, combos):
                 completed += 1
                 pct = (completed / total) * 100
                 elapsed = time.time() - start_time
+                email, password = futures[future]  # always correct even if future crashes
 
                 try:
                     result = future.result(timeout=60)
