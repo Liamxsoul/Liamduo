@@ -1403,6 +1403,8 @@ def process_combos(chat_id, combos):
     """Each user's check runs in its own session. Hits/stats use locks."""
     global super_count, family_count, free_count, fail_count, max_count, individual_count
     global last_batch_super, last_batch_family, last_batch_free, last_batch_fail
+    global all_super_hits, all_max_hits, all_individual_hits
+    global all_family_hits, all_free_accounts, all_error_accounts
 
     sess = get_session(chat_id)
     with sess["lock"]:
@@ -1568,8 +1570,9 @@ Duolingo Max Plan : {local_max}\nDuolingo Family Plan : {local_family}\nDuolingo
                 e, p = item
                 lines.append(f"{e}:{p}")
             else:
-                e, p, _ = item
-                lines.append(f"{e}:{p}")
+                e, p, detail = item
+                lines.append(detail)
+                lines.append("=" * 40)
         fobj = _autoio.BytesIO("\n".join(lines).encode("utf-8"))
         fobj.name = fname
         try:
